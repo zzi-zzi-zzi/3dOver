@@ -4,7 +4,8 @@ using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
 using ff14bot;
-using QuickGraph;
+using System.Runtime.Caching;
+
 using RB3DOverlay.Interface;
 using SlimDX;
 using SlimDX.Direct2D;
@@ -81,8 +82,12 @@ namespace RB3DOverlay.Overlay
             Device.VertexFormat = ColoredVertex.Format;
         }
 
+        private Vector3 Camera;
+
         internal void UpdateZBuffer()
         {
+            Camera = CameraManager.Camera;
+
             UpdateZBufferTriangles();
 
             if (_numZBufferTriangles <= 0)
@@ -158,46 +163,55 @@ namespace RB3DOverlay.Overlay
             _numZBufferTriangles = triangles.Length;
         }
 
-        private readonly Dictionary<Tuple<float, FontStyle>, Font> _fontDictionary = new Dictionary<Tuple<float, FontStyle>, Font>();
-        private readonly Dictionary<Tuple<int, int, float, FontStyle>, Rectangle> _fontRectangle = new Dictionary<Tuple<int, int, float, FontStyle>, Rectangle>();
-
+        private CacheItemPolicy CachePolicy = new CacheItemPolicy {SlidingExpiration = TimeSpan.FromMinutes(3)};
+        
         public void DrawText(string text, int x, int y, Color color, float emSize = 12f,
-            FontStyle fontStyle = FontStyle.Regular)
+            FontStyle fontStyle = FontStyle.Regular, bool begin = true)
         {
             if (_fontSprite == null)
+            {
                 _fontSprite = new Sprite(Device);
+            }
+            if(begin)
+                _fontSprite.Begin(SpriteFlags.AlphaBlend);
 
-            _fontSprite.Begin(SpriteFlags.AlphaBlend);
 
-            var key = new Tuple<float, FontStyle>(emSize, fontStyle);
+            var key = $"{emSize} : {fontStyle}";
+            Lazy<Font> fontValue = new Lazy<Font>(() => new Font(Device,
+                new System.Drawing.Font(FontFamily.GenericSansSerif, emSize,
+                    fontStyle)));
+
+            var fnt = MemoryCache.Default.AddOrGetExisting(key, fontValue, CachePolicy);
 
             Font font;
-            if (!_fontDictionary.TryGetValue(key, out font))
-            {
-                font = new Font(Device,
-                    new System.Drawing.Font(FontFamily.GenericSansSerif, emSize,
-                        fontStyle));
-                _fontDictionary.Add(key, font);
-            }
+            if (fnt == null)
+                font = fontValue.Value;
+            else
+                font = ((Lazy<Font>) fnt).Value;
+
             var rows = text.Split(new[] {Environment.NewLine}, StringSplitOptions.None);
-            var cols = rows.Select(i => i.Length).OrderByDescending(i => i).FirstOrDefault();
-            var fontRectKey = new Tuple<int, int, float, FontStyle>(rows.Length, cols, emSize, fontStyle);
+            var cols = rows.Select(i => i.Length);
+
+            var fontRectKey = $"{rows.Length} : {cols} : {key}";
+
+            Lazy<Rectangle> stringRectLookup = new Lazy<Rectangle>(() => font.MeasureString(_fontSprite, text, DrawTextFormat.Left));
+
+            var rec = MemoryCache.Default.AddOrGetExisting(fontRectKey, stringRectLookup, CachePolicy);
 
             Rectangle stringRect;
-            if (!_fontRectangle.TryGetValue(fontRectKey, out stringRect))
-            {
-                stringRect = font.MeasureString(_fontSprite, text, DrawTextFormat.Left);
-                _fontRectangle.Add(fontRectKey, stringRect);
-            }
+            if (rec == null)
+                stringRect = stringRectLookup.Value;
+            else
+                stringRect = ((Lazy<Rectangle>)rec).Value;
+
 
             Rectangle rect = new Rectangle(x, y, stringRect.Width + 1, stringRect.Height + 1);
 
             font.DrawString(_fontSprite, text, rect, DrawTextFormat.Left, color.ToArgb());
-            _fontSprite.End();
+            if (begin)
+                _fontSprite.End();
         }
-
-        private Dictionary<string, Mesh> _3dTextLookup = new Dictionary<string, Mesh>();
-
+        
         public void Draw3DText(string text, Vector3 textPos, float emSize = 12f,
                                FontStyle fontStyle = FontStyle.Regular)
         {
@@ -205,7 +219,7 @@ namespace RB3DOverlay.Overlay
                 throw new ArgumentException(nameof(text));
             if (text == Core.Me.Name)
                 text = "ME";
-            var cam = FF14Camera.Camera.Convert();
+            var cam = Camera;
             var up = new Vector3(0, 1, 0);
             var fwd = new Vector3(0, 0, 1);
 
@@ -214,15 +228,23 @@ namespace RB3DOverlay.Overlay
             //mtx.Invert();
             Device.SetTransform(TransformState.World,
                 mtx);
-            
-            Mesh m;
-            if (!_3dTextLookup.TryGetValue(text, out m))
-            {
-                m = Mesh.CreateText(Device,
-                    new System.Drawing.Font("Verdana", emSize, fontStyle), text,
-                    0.001f, 0.01f);
 
-                _3dTextLookup.Add(text, m);
+            var meshKey = $"mesh : {text}";
+
+            Lazy<Mesh> meshLookup = new Lazy<Mesh>(() => Mesh.CreateText(Device,
+                new System.Drawing.Font("Verdana", emSize, fontStyle), text,
+                0.001f, 0.01f));
+
+            var rec = MemoryCache.Default.AddOrGetExisting(meshKey, meshLookup, CachePolicy);
+
+            Mesh m;
+            if (rec == null)
+            {
+                m = meshLookup.Value;
+            }
+            else
+            {
+                m = ((Lazy<Mesh>) rec).Value;
             }
             
             m.DrawSubset(0);
@@ -233,6 +255,11 @@ namespace RB3DOverlay.Overlay
         public void DrawOutlinedText(string text, int x, int y, Color color, Color shadowColor,
                                      float emSize = 12f, FontStyle fontStyle = FontStyle.Regular)
         {
+            if (_fontSprite == null)
+            {
+                _fontSprite = new Sprite(Device);
+            }
+            _fontSprite.Begin(SpriteFlags.AlphaBlend);
             for (int yo = -1; yo <= 1; yo++)
             {
                 for (int xo = -1; xo <= 1; xo++)
@@ -240,11 +267,13 @@ namespace RB3DOverlay.Overlay
                     if (xo == 0 && yo == 0)
                         continue;
 
-                    DrawText(text, x + xo, y + yo, shadowColor, emSize, fontStyle);
+                    DrawText(text, x + xo, y + yo, shadowColor, emSize, fontStyle, false);
                 }
             }
 
-            DrawText(text, x, y, color, emSize, fontStyle);
+            DrawText(text, x, y, color, emSize, fontStyle, false);
+
+            _fontSprite.End();
         }
 
         public void DrawLine(Vector3 start, Vector3 end, Color color, float width = 0.025f)

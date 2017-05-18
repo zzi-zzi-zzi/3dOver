@@ -104,16 +104,6 @@ namespace RB3DOverlay
             Vector3 vecStart = new Vector3(mypos.X, mypos.Y, mypos.Z);
             int myLevel = Core.Me.ClassLevel;
 
-            NVector3[] data = new NVector3[]
-            {
-                new NVector3(477.8114f, 16.397f, 456.4764f),
-                new NVector3(477.8114f, 17.09699f, 462.8764f),
-                new NVector3(484.2114f, 17.397f, 462.8764f),
-                new NVector3(484.2114f, 16.397f, 456.4764f),
-            };
-
-            ctx.DrawTriangleFan(data,0, 4, Color.FromArgb(100, Color.Blue));
-           
 
             if (settings.DrawGameStats)
             {
