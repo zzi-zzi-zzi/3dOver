@@ -86,7 +86,7 @@ namespace RB3DOverlay.Overlay
 
         internal void UpdateZBuffer()
         {
-            Camera = CameraManager.Camera;
+            Camera = CameraManager.CameraLocation;
 
             UpdateZBufferTriangles();
 
